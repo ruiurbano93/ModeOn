@@ -1,17 +1,49 @@
-const CACHE = 'vitalsync-v1';
-const ASSETS = ['/', '/index.html', '/manifest.json'];
+// VitalSync Service Worker - versão mínima compatível iOS
+const CACHE_NAME = 'vitalsync-v1';
 
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+// Instalar - não faz cache no install (deixa o fetch fazer)
+self.addEventListener('install', function(event) {
+  self.skipWaiting();
 });
 
-self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request).then(res => {
-      const resClone = res.clone();
-      caches.open(CACHE).then(c => c.put(e.request, resClone));
-      return res;
-    }).catch(() => caches.match('/index.html')))
+// Ativar - limpa caches antigos
+self.addEventListener('activate', function(event) {
+  event.waitUntil(
+    caches.keys().then(function(cacheNames) {
+      return Promise.all(
+        cacheNames.map(function(cacheName) {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    }).then(function() {
+      return self.clients.claim();
+    })
+  );
+});
+
+// Fetch - estratégia: network first, cache fallback
+self.addEventListener('fetch', function(event) {
+  // Só cachear requests GET
+  if (event.request.method !== 'GET') return;
+  
+  event.respondWith(
+    fetch(event.request)
+      .then(function(response) {
+        // Se a resposta é válida, guardar em cache
+        if (response && response.status === 200 && response.type === 'basic') {
+          var responseClone = response.clone();
+          caches.open(CACHE_NAME).then(function(cache) {
+            cache.put(event.request, responseClone);
+          });
+        }
+        return response;
+      })
+      .catch(function() {
+        // Se falhar (offline), tenta o cache
+        return caches.match(event.request);
+      })
   );
 });
 
