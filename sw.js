@@ -1,49 +1,52 @@
-// VitalSync Service Worker - versão mínima compatível iOS
-const CACHE_NAME = 'vitalsync-v1';
+const CACHE_NAME = "pulso-cache-v1";
+const APP_SHELL = [
+  "./index.html",
+  "./style.css",
+  "./app.js",
+  "./manifest.json",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
+  "./icons/icon-512-maskable.png"
+];
 
-// Instalar - não faz cache no install (deixa o fetch fazer)
-self.addEventListener('install', function(event) {
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+  );
   self.skipWaiting();
 });
 
-// Ativar - limpa caches antigos
-self.addEventListener('activate', function(event) {
+self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then(function(cacheNames) {
-      return Promise.all(
-        cacheNames.map(function(cacheName) {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
+// Network-first para chamadas à API da Anthropic (precisam de estar sempre atualizadas),
+// cache-first para o resto (app shell), com fallback offline.
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+
+  if (url.hostname.includes("anthropic.com")) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  if (event.request.method !== "GET") return;
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      if (cached) return cached;
+      return fetch(event.request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          return response;
         })
-      );
-    }).then(function() {
-      return self.clients.claim();
+        .catch(() => caches.match("./index.html"));
     })
   );
 });
-
-// Fetch - estratégia: network first, cache fallback
-self.addEventListener('fetch', function(event) {
-  // Só cachear requests GET
-  if (event.request.method !== 'GET') return;
-  
-  event.respondWith(
-    fetch(event.request)
-      .then(function(response) {
-        // Se a resposta é válida, guardar em cache
-        if (response && response.status === 200 && response.type === 'basic') {
-          var responseClone = response.clone();
-          caches.open(CACHE_NAME).then(function(cache) {
-            cache.put(event.request, responseClone);
-          });
-        }
-        return response;
-      })
-      .catch(function() {
-        // Se falhar (offline), tenta o cache
-        return caches.match(event.request);
-      })
-  );
-});
-
